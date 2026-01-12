@@ -115,15 +115,12 @@ export default function Chat() {
 
         {messages.map(msg => {
           // 🇮🇳 FORCE INDIA TIME (Asia/Kolkata)
-          const time = new Date(msg.created_at).toLocaleTimeString(
-            'en-IN',
-            {
-              timeZone: 'Asia/Kolkata',
-              hour: '2-digit',
-              minute: '2-digit',
-              hour12: false
-            }
-          )
+          const date = new Date(msg.created_at)
+		  const time =
+			date.getHours().toString().padStart(2, '0') +
+			':' +
+			date.getMinutes().toString().padStart(2, '0')
+
 
           return (
             <div
