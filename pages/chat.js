@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/router'
 
 export default function Chat() {
@@ -8,7 +8,8 @@ export default function Chat() {
   const [text, setText] = useState('')
   const [loading, setLoading] = useState(true)
 
-  // get logged in user
+  const longPressTimer = useRef(null)
+
   const username =
     typeof window !== 'undefined'
       ? localStorage.getItem('username')
@@ -33,7 +34,7 @@ export default function Chat() {
     }
   }
 
-  // send message
+  // send message (FIXED)
   async function sendMessage() {
     if (!text.trim()) return
 
@@ -41,7 +42,10 @@ export default function Chat() {
       await fetch('/api/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text })
+        body: JSON.stringify({
+          text,
+          username   // ✅ THIS FIXES THE BUG
+        })
       })
 
       setText('')
@@ -51,7 +55,7 @@ export default function Chat() {
     }
   }
 
-  // delete message (delete for everyone)
+  // delete message
   async function deleteMessage(id) {
     const ok = confirm('Delete this message for everyone?')
     if (!ok) return
@@ -69,7 +73,18 @@ export default function Chat() {
     }
   }
 
-  // initial load + polling
+  // long press handlers (mobile)
+  function handleTouchStart(id) {
+    longPressTimer.current = setTimeout(() => {
+      deleteMessage(id)
+    }, 500) // 0.5s long press
+  }
+
+  function handleTouchEnd() {
+    clearTimeout(longPressTimer.current)
+  }
+
+  // polling
   useEffect(() => {
     loadMessages()
     const interval = setInterval(loadMessages, 2000)
@@ -77,13 +92,7 @@ export default function Chat() {
   }, [])
 
   return (
-    <div
-      style={{
-        padding: 20,
-        maxWidth: 800,
-        margin: '0 auto'
-      }}
-    >
+    <div style={{ padding: 20, maxWidth: 800, margin: '0 auto' }}>
       <h2>Group Chat</h2>
       <p>Logged in as <b>{username}</b></p>
 
@@ -95,7 +104,7 @@ export default function Chat() {
           height: 400,
           overflowY: 'auto',
           marginBottom: 10,
-          background: '#e5ddd5' // WhatsApp-like chat background
+          background: '#e5ddd5'
         }}
       >
         {loading && <p>Loading messages…</p>}
@@ -104,27 +113,46 @@ export default function Chat() {
           <p>No messages yet</p>
         )}
 
-        {messages.map(msg => (
-          <div
-            key={msg.id}
-            onContextMenu={(e) => {
-              e.preventDefault()
-              deleteMessage(msg.id)
-            }}
-            style={{
-              marginBottom: 8,
-              padding: 8,
-              background: '#ffffff',   // ✅ WHITE MESSAGE BUBBLE
-              color: '#000',
-              borderRadius: 6,
-              maxWidth: '70%',
-              boxShadow: '0 1px 2px rgba(0,0,0,0.15)',
-              cursor: 'context-menu'
-            }}
-          >
-            <b>{msg.username}</b>: {msg.text}
-          </div>
-        ))}
+        {messages.map(msg => {
+          const time = new Date(msg.created_at).toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit'
+          })
+
+          return (
+            <div
+              key={msg.id}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                deleteMessage(msg.id)
+              }}
+              onTouchStart={() => handleTouchStart(msg.id)}
+              onTouchEnd={handleTouchEnd}
+              style={{
+                marginBottom: 8,
+                padding: 8,
+                background: '#ffffff',
+                color: '#000',
+                borderRadius: 6,
+                maxWidth: '70%',
+                boxShadow: '0 1px 2px rgba(0,0,0,0.15)',
+                cursor: 'context-menu'
+              }}
+            >
+              <div><b>{msg.username}</b>: {msg.text}</div>
+
+              <div
+                style={{
+                  fontSize: 10,
+                  color: '#555',
+                  marginTop: 4
+                }}
+              >
+                {time}
+              </div>
+            </div>
+          )
+        })}
       </div>
 
       <div style={{ display: 'flex', gap: 8 }}>
@@ -143,12 +171,8 @@ export default function Chat() {
           }}
         />
 
-        <button onClick={sendMessage}>
-          Send
-        </button>
+        <button onClick={sendMessage}>Send</button>
       </div>
-
-      {/* Voice / video calls will be added here later */}
     </div>
   )
 }
