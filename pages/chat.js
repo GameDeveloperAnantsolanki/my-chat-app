@@ -34,7 +34,7 @@ export default function Chat() {
     }
   }
 
-  // send message (FIXED)
+  // send message
   async function sendMessage() {
     if (!text.trim()) return
 
@@ -44,7 +44,7 @@ export default function Chat() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           text,
-          username   // ✅ THIS FIXES THE BUG
+          username
         })
       })
 
@@ -73,11 +73,11 @@ export default function Chat() {
     }
   }
 
-  // long press handlers (mobile)
+  // long press (mobile)
   function handleTouchStart(id) {
     longPressTimer.current = setTimeout(() => {
       deleteMessage(id)
-    }, 500) // 0.5s long press
+    }, 500)
   }
 
   function handleTouchEnd() {
@@ -114,10 +114,11 @@ export default function Chat() {
         )}
 
         {messages.map(msg => {
-          const time = new Date(msg.created_at).toLocaleTimeString([], {
-            hour: '2-digit',
-            minute: '2-digit'
-          })
+          // ✅ CORRECT TIME HANDLING (UTC → local HH:MM)
+          const date = new Date(msg.created_at)
+          const hours = date.getHours().toString().padStart(2, '0')
+          const minutes = date.getMinutes().toString().padStart(2, '0')
+          const time = `${hours}:${minutes}`
 
           return (
             <div
@@ -139,7 +140,9 @@ export default function Chat() {
                 cursor: 'context-menu'
               }}
             >
-              <div><b>{msg.username}</b>: {msg.text}</div>
+              <div>
+                <b>{msg.username}</b>: {msg.text}
+              </div>
 
               <div
                 style={{
