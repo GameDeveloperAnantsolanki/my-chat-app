@@ -77,18 +77,25 @@ export default function Chat() {
   }, [])
 
   return (
-    <div style={{ padding: 20 }}>
+    <div
+      style={{
+        padding: 20,
+        maxWidth: 800,
+        margin: '0 auto'
+      }}
+    >
       <h2>Group Chat</h2>
       <p>Logged in as <b>{username}</b></p>
 
       <div
         style={{
-          border: '1px solid #444',
+          border: '1px solid #ccc',
           borderRadius: 6,
           padding: 10,
           height: 400,
           overflowY: 'auto',
-          marginBottom: 10
+          marginBottom: 10,
+          background: '#e5ddd5' // WhatsApp-like chat background
         }}
       >
         {loading && <p>Loading messages…</p>}
@@ -106,10 +113,12 @@ export default function Chat() {
             }}
             style={{
               marginBottom: 8,
-              padding: 6,
-              background:
-                msg.username === username ? '#222' : '#111',
-              borderRadius: 4,
+              padding: 8,
+              background: '#ffffff',   // ✅ WHITE MESSAGE BUBBLE
+              color: '#000',
+              borderRadius: 6,
+              maxWidth: '70%',
+              boxShadow: '0 1px 2px rgba(0,0,0,0.15)',
               cursor: 'context-menu'
             }}
           >
@@ -126,7 +135,8 @@ export default function Chat() {
           style={{
             flex: 1,
             padding: 8,
-            borderRadius: 4
+            borderRadius: 4,
+            border: '1px solid #ccc'
           }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') sendMessage()
@@ -138,7 +148,7 @@ export default function Chat() {
         </button>
       </div>
 
-      {/* voice / video will live here later */}
+      {/* Voice / video calls will be added here later */}
     </div>
   )
 }
