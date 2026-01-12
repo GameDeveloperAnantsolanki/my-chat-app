@@ -1,165 +1,181 @@
-import { useEffect, useState, useRef } from 'react';
-import { useRouter } from 'next/router';
+import { useEffect, useState, useRef } from "react";
+import Peer from "simple-peer";
 
 export default function Chat() {
-  const router = useRouter();
-  const { user } = router.query;
+  const username =
+    typeof window !== "undefined" ? localStorage.getItem("username") : null;
 
-  const [msg, setMsg] = useState('');
-  const [chat, setChat] = useState([]);
+  const [messages, setMessages] = useState([]);
+  const [text, setText] = useState("");
+
+  // Voice state
   const [inCall, setInCall] = useState(false);
-  const [callActive, setCallActive] = useState(false);
-  const [host, setHost] = useState(null);
-  const [participants, setParticipants] = useState([]);
+  const [incomingCall, setIncomingCall] = useState(false);
+  const [peers, setPeers] = useState([]);
+  const localStreamRef = useRef();
+  const peersRef = useRef([]);
 
-  const localStream = useRef(null);
-  const peers = useRef({});
-  const audioRefs = useRef({});
-
-  // ---------- TEXT CHAT ----------
-  const loadMessages = async () => {
-    const res = await fetch('/api/messages');
-    const data = await res.json();
-    setChat(data);
-  };
-  const sendMessage = async () => {
-    if (!msg.trim()) return;
-    await fetch('/api/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user, text: msg })
-    });
-    setMsg('');
-    loadMessages();
-  };
+  // Fetch messages
   useEffect(() => {
-    if (!user) return;
-    loadMessages();
-    const interval = setInterval(loadMessages, 1000);
+    if (!username) return;
+    const interval = setInterval(async () => {
+      const res = await fetch("/api/messages");
+      const data = await res.json();
+      setMessages(data);
+    }, 1500);
     return () => clearInterval(interval);
-  }, [user]);
-  if (!user) return <p>Loading...</p>;
+  }, [username]);
 
-  // ---------- GROUP VOICE CALL ----------
-  const checkCallStatus = async () => {
-    const res = await fetch('/api/call-status');
-    const data = await res.json();
-    setCallActive(data.active);
-    setHost(data.host);
-    setParticipants(data.participants || []);
-  };
+  // Voice call polling (simple demo)
+  useEffect(() => {
+    if (!username) return;
+    if (!inCall) return;
+
+    const interval = setInterval(async () => {
+      const res = await fetch("/api/voice/offer");
+      const offers = await res.json();
+      offers.forEach(async (offer) => {
+        // ignore your own offers
+        if (offer.data.from === username) return;
+
+        if (!peersRef.current.find((p) => p.id === offer.id)) {
+          setIncomingCall(true);
+        }
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [username, inCall]);
 
   const startCall = async () => {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    localStream.current = stream;
+    localStreamRef.current = stream;
     setInCall(true);
-    peers.current = {};
+    setIncomingCall(false);
 
-    await fetch('/api/call-status', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ active: true, host: user, participants: [user] })
+    // create a peer
+    const peer = new Peer({ initiator: true, trickle: false, stream });
+
+    peer.on("signal", async (data) => {
+      await fetch("/api/voice/offer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ from: username, offer: data }),
+      });
     });
 
-    pollSignals();
+    peer.on("stream", (remoteStream) => {
+      const audio = document.createElement("audio");
+      audio.srcObject = remoteStream;
+      audio.autoplay = true;
+      document.body.appendChild(audio);
+    });
+
+    peersRef.current.push({ id: username, peer });
+    setPeers([...peersRef.current]);
   };
 
-  const joinCall = async () => {
+  const joinCall = async (offer) => {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    localStream.current = stream;
+    localStreamRef.current = stream;
     setInCall(true);
-    pollSignals();
-  };
+    setIncomingCall(false);
 
-  const endCall = async () => {
-    if (localStream.current) localStream.current.getTracks().forEach(t => t.stop());
-    Object.values(peers.current).forEach(pc => pc.close());
-    peers.current = {};
-    setInCall(false);
+    const peer = new Peer({ initiator: false, trickle: false, stream });
 
-    if (user === host) {
-      await fetch('/api/call-status', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ active: false, host: null, participants: [] })
+    peer.on("signal", async (data) => {
+      await fetch("/api/voice/answer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to: offer.data.from, answer: data }),
       });
-    }
+    });
+
+    peer.on("stream", (remoteStream) => {
+      const audio = document.createElement("audio");
+      audio.srcObject = remoteStream;
+      audio.autoplay = true;
+      document.body.appendChild(audio);
+    });
+
+    peer.signal(offer.data.offer);
+    peersRef.current.push({ id: offer.id, peer });
+    setPeers([...peersRef.current]);
   };
 
-  const pollSignals = async () => {
-    if (!inCall) return;
-
-    const res = await fetch(`/api/signaling?user=${user}`);
-    const incoming = await res.json();
-
-    for (let { from, signal } of incoming) {
-      if (!peers.current[from]) {
-        const pc = createPeer(from, false);
-        peers.current[from] = pc;
-        pc.setRemoteDescription(new RTCSessionDescription(signal));
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        await fetch('/api/signaling', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ from: user, to: from, signal: answer })
-        });
-      }
-    }
-    setTimeout(pollSignals, 1000);
+  const sendMessage = async () => {
+    if (!text) return;
+    await fetch("/api/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, text }),
+    });
+    setText("");
   };
 
-  const createPeer = (peerUser, initiator = true) => {
-    const pc = new RTCPeerConnection();
-    if (localStream.current)
-      localStream.current.getTracks().forEach(track => pc.addTrack(track, localStream.current));
+  if (!username) return <p>Please login first</p>;
 
-    pc.ontrack = e => {
-      if (!audioRefs.current[peerUser]) {
-        audioRefs.current[peerUser] = document.createElement('audio');
-        audioRefs.current[peerUser].autoplay = true;
-        audioRefs.current[peerUser].srcObject = e.streams[0];
-        document.body.appendChild(audioRefs.current[peerUser]);
-      }
-    };
-    return pc;
-  };
-
-  useEffect(() => {
-    const interval = setInterval(checkCallStatus, 1000);
-    return () => clearInterval(interval);
-  }, [user]);
-
-  // ---------- UI ----------
   return (
-    <div style={{ padding: '20px' }}>
-      <h1>Welcome, {user}</h1>
+    <div style={{ padding: 20 }}>
+      <h1>Welcome, {username}</h1>
 
-      {/* TEXT CHAT */}
-      <div style={{ border: '1px solid #000', padding: '10px', height: '300px', overflowY: 'scroll' }}>
-        {chat.map((m, i) => (
-          <p key={i}><b>{m.user}:</b> {m.text}</p>
+      {/* Chat box */}
+      <div
+        style={{
+          height: 300,
+          overflowY: "scroll",
+          border: "1px solid black",
+          padding: 10,
+        }}
+      >
+        {messages.map((m) => (
+          <p key={m.id}>
+            <b>{m.username}:</b> {m.text}
+          </p>
         ))}
       </div>
+
       <input
-        value={msg}
-        onChange={e => setMsg(e.target.value)}
-        onKeyDown={e => e.key === 'Enter' && sendMessage()}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="Type a message..."
       />
       <button onClick={sendMessage}>Send</button>
 
-      {/* VOICE CALL UI */}
-      <div style={{ marginTop: '20px' }}>
-        {!inCall && !callActive && <button onClick={startCall}>Start Voice Call</button>}
-        {!inCall && callActive && user !== host && <button onClick={joinCall}>Join Voice Call</button>}
-        {inCall && <button onClick={endCall}>End Call</button>}
+      {/* Voice call controls */}
+      {!inCall && (
+        <button style={{ marginLeft: 10 }} onClick={startCall}>
+          Start Call
+        </button>
+      )}
 
-        {callActive && !inCall && user !== host && (
-          <div style={{ marginTop: '10px', color: 'green', fontWeight: 'bold' }}>
-            {host} is in a voice call. Click "Join Voice Call" to participate.
-          </div>
-        )}
-      </div>
+      {incomingCall && !inCall && (
+        <div
+          style={{
+            position: "fixed",
+            top: 10,
+            right: 10,
+            background: "yellow",
+            padding: 10,
+            border: "1px solid black",
+            zIndex: 999,
+          }}
+        >
+          <p>Incoming group call!</p>
+          <button
+            onClick={() => {
+              // For demo: pick the first offer to join
+              fetch("/api/voice/offer")
+                .then((res) => res.json())
+                .then((offers) => {
+                  if (offers.length > 0) joinCall(offers[0]);
+                });
+            }}
+          >
+            Join Call
+          </button>
+        </div>
+      )}
     </div>
   );
 }
