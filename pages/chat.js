@@ -1,179 +1,192 @@
-import { useEffect, useState, useRef } from 'react'
-import { useRouter } from 'next/router'
+import { useEffect, useRef, useState } from 'react'
+import { supabase } from '../lib/supabase'
 
 export default function Chat() {
-  const router = useRouter()
-
   const [messages, setMessages] = useState([])
   const [text, setText] = useState('')
-  const [loading, setLoading] = useState(true)
+  const chatEndRef = useRef(null)
 
-  const longPressTimer = useRef(null)
-
-  const username =
+  const user =
     typeof window !== 'undefined'
-      ? localStorage.getItem('username')
+      ? JSON.parse(localStorage.getItem('user'))
       : null
 
-  // redirect if not logged in
-  useEffect(() => {
-    if (!username) {
-      router.push('/')
-    }
-  }, [username])
+  // ---------------- TIME (+5:30 ADD ONLY) ----------------
+  function getISTTime(createdAt) {
+    const date = new Date(createdAt)
+    const ist =
+      date.getTime() +
+      (5 * 60 * 60 * 1000) +
+      (30 * 60 * 1000)
 
-  // load messages
-  async function loadMessages() {
-    try {
-      const res = await fetch('/api/messages')
-      const data = await res.json()
-      setMessages(data)
-      setLoading(false)
-    } catch (err) {
-      console.error('Failed to load messages', err)
-    }
+    const d = new Date(ist)
+    const h = d.getHours().toString().padStart(2, '0')
+    const m = d.getMinutes().toString().padStart(2, '0')
+    return `${h}:${m}`
   }
 
-  // send message
+  // ---------------- LOAD MESSAGES ----------------
+  async function loadMessages() {
+    const { data } = await supabase
+      .from('messages')
+      .select('*')
+      .order('created_at', { ascending: true })
+
+    if (data) setMessages(data)
+  }
+
+  // ---------------- SEND TEXT ----------------
   async function sendMessage() {
     if (!text.trim()) return
 
-    try {
-      await fetch('/api/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text,
-          username
-        })
-      })
+    await supabase.from('messages').insert({
+      sender: user.username,
+      type: 'text',
+      content: text
+    })
 
-      setText('')
-      loadMessages()
-    } catch (err) {
-      console.error('Failed to send message', err)
-    }
+    setText('')
   }
 
-  // delete message
+  // ---------------- IMAGE UPLOAD ----------------
+  async function uploadImage(e) {
+    const file = e.target.files[0]
+    if (!file) return
+
+    const ext = file.name.split('.').pop()
+    const fileName = `${Date.now()}.${ext}`
+
+    await supabase.storage
+      .from('chat-images')
+      .upload(fileName, file)
+
+    const { data } = supabase.storage
+      .from('chat-images')
+      .getPublicUrl(fileName)
+
+    await supabase.from('messages').insert({
+      sender: user.username,
+      type: 'image',
+      image_url: data.publicUrl
+    })
+  }
+
+  // ---------------- DELETE (LONG PRESS MOBILE) ----------------
   async function deleteMessage(id) {
-    const ok = confirm('Delete this message for everyone?')
-    if (!ok) return
-
-    try {
-      await fetch('/api/delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id })
-      })
-
-      loadMessages()
-    } catch (err) {
-      console.error('Failed to delete message', err)
-    }
+    await supabase.from('messages').delete().eq('id', id)
+    setMessages(prev => prev.filter(m => m.id !== id))
   }
 
-  // long press (mobile)
-  function handleTouchStart(id) {
-    longPressTimer.current = setTimeout(() => {
-      deleteMessage(id)
-    }, 500)
-  }
-
-  function handleTouchEnd() {
-    clearTimeout(longPressTimer.current)
-  }
-
-  // polling
+  // ---------------- REALTIME ----------------
   useEffect(() => {
     loadMessages()
-    const interval = setInterval(loadMessages, 2000)
-    return () => clearInterval(interval)
+
+    const channel = supabase
+      .channel('messages')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'messages' },
+        payload => {
+          setMessages(prev => [...prev, payload.new])
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'messages' },
+        payload => {
+          setMessages(prev =>
+            prev.filter(m => m.id !== payload.old.id)
+          )
+        }
+      )
+      .subscribe()
+
+    return () => supabase.removeChannel(channel)
   }, [])
 
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
+
+  // ---------------- UI ----------------
   return (
-    <div style={{ padding: 20, maxWidth: 800, margin: '0 auto' }}>
-      <h2>Group Chat</h2>
-      <p>Logged in as <b>{username}</b></p>
-
-      <div
-        style={{
-          border: '1px solid #ccc',
-          borderRadius: 6,
-          padding: 10,
-          height: 400,
-          overflowY: 'auto',
-          marginBottom: 10,
-          background: '#e5ddd5'
-        }}
-      >
-        {loading && <p>Loading messages…</p>}
-
-        {!loading && messages.length === 0 && (
-          <p>No messages yet</p>
-        )}
-
-        {messages.map(msg => {
-          // 🇮🇳 FORCE INDIA TIME (Asia/Kolkata)
-          const date = new Date(msg.created_at)
-		  const time =
-			date.getHours().toString().padStart(2, '0') +
-			':' +
-			date.getMinutes().toString().padStart(2, '0')
-
-
-          return (
+    <div className="chat-container">
+      <div className="chat-box">
+        {messages.map(msg => (
+          <div
+            key={msg.id}
+            className={
+              msg.sender === user.username
+                ? 'message sent'
+                : 'message received'
+            }
+            onContextMenu={e => {
+              e.preventDefault()
+              deleteMessage(msg.id)
+            }}
+          >
             <div
-              key={msg.id}
-              onContextMenu={(e) => {
-                e.preventDefault()
-                deleteMessage(msg.id)
-              }}
-              onTouchStart={() => handleTouchStart(msg.id)}
-              onTouchEnd={handleTouchEnd}
+              className="bubble"
               style={{
-                marginBottom: 8,
-                padding: 8,
-                background: '#ffffff',
+                background: '#fff',
                 color: '#000',
+                padding: 8,
                 borderRadius: 6,
                 maxWidth: '70%',
-                boxShadow: '0 1px 2px rgba(0,0,0,0.15)',
-                cursor: 'context-menu'
+                boxShadow: '0 1px 2px rgba(0,0,0,0.15)'
               }}
             >
-              <div>
-                <b>{msg.username}</b>: {msg.text}
-              </div>
+              {msg.type === 'text' && msg.content}
+
+              {msg.type === 'image' && (
+                <img
+                  src={msg.image_url}
+                  style={{
+                    maxWidth: '200px',
+                    borderRadius: 6,
+                    display: 'block'
+                  }}
+                />
+              )}
 
               <div
                 style={{
                   fontSize: 10,
-                  color: '#555',
-                  marginTop: 4
+                  opacity: 0.6,
+                  marginTop: 4,
+                  textAlign: 'left'
                 }}
               >
-                {time}
+                {getISTTime(msg.created_at)}
               </div>
             </div>
-          )
-        })}
+          </div>
+        ))}
+        <div ref={chatEndRef} />
       </div>
 
-      <div style={{ display: 'flex', gap: 8 }}>
+      <div className="input-bar">
+        <input
+          type="file"
+          accept="image/*"
+          hidden
+          id="imageUpload"
+          onChange={uploadImage}
+        />
+
+        <button
+          onClick={() =>
+            document.getElementById('imageUpload').click()
+          }
+        >
+          📎
+        </button>
+
         <input
           value={text}
           onChange={e => setText(e.target.value)}
           placeholder="Type a message"
-          style={{
-            flex: 1,
-            padding: 8,
-            borderRadius: 4,
-            border: '1px solid #ccc'
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') sendMessage()
-          }}
+          onKeyDown={e => e.key === 'Enter' && sendMessage()}
         />
 
         <button onClick={sendMessage}>Send</button>
